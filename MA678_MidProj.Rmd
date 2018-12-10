@@ -1,0 +1,750 @@
+---
+title: "MA678 Midterm Project: Analysis on Global Cuisine"
+author: "Sky Liu"
+date: "12/9/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE,message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+pacman::p_load(
+  "ggplot2",
+  "knitr",
+  "readxl",
+  "dplyr",
+  "zoo",
+  "data.table",
+  "matlab",
+  "lattice",
+  "grid",
+  "gridExtra",
+  "arm",
+  "ggpubr",
+  "blmeco",
+  "lmtest",
+  "ROCR",
+  "MASS",
+  "glmmTMB",
+  "caret",
+  "ordinal"
+)
+```
+
+##Abstract
+
+This project analyzes Americans' preference to global cuisine, by looking at people's gender, age, income, region, interest and knowledge in global cuisine. The fitted ordinal fixed-effect logistic regression model suggests that people with higher interest and knowledge in global cuisine are more likely to give higher ratings on foreign cuisine. The model also suggests that Italian cuisine is the most favorite cuisine among the five cuisines analyzed in this project.
+
+##Introduction
+###Background
+
+The United States is an inclusive country that enbraces diversity. Food is an excellent example to show this point. A wide veriaty of global cuisines can be found everywhere in the States. So, what is Americans' favorite cuisine? The FiveThirtyEight International Food Association held a Food World Cup in 2014$^{[1]}$ to find out the answer. This project uses the data from the Food World Cup, and reasearches the topic in a more analytical way. Furthermore, instead of onlying asking what the most favorite cuisine is, this project also focuses how the other factors like gender, age, income, region, interest and knowledge in global cuisine impact the preference.
+
+##Method
+###Data
+ 
+```{r dataclean, warning=FALSE,echo=FALSE,message=FALSE}
+data<-fread("food.csv")
+
+
+data1<-data%>%filter(!Gender=="")
+data1$Gender<-as.factor(data1$Gender)
+
+
+data1<-data1%>%filter(!Age=="")
+data1$Age<-as.factor(data1$Age)
+data1 <- within(data1, Age <- relevel(Age, ref="18-29"))
+
+data1<-data1%>%mutate(Knowledge=knowledge)%>%
+  dplyr::select(-c(knowledge))
+data1$Knowledge<-as.factor(data1$Knowledge)  
+data1 <- within(data1, Knowledge <- relevel(Knowledge, ref="Novice"))
+
+data1<-data1%>%filter(!interested=="")%>%
+  mutate(Interest = ifelse(interested=="A lot","Lots",
+         ifelse(interested=="Not much_","Little",
+         ifelse(interested=="Some","Some","None"))))%>%
+  dplyr::select(-c(interested))
+data1$Interest<-as.factor(data1$Interest)  
+data1 <- within(data1, Interest <- relevel(Interest, ref="None"))
+
+data1<-data1%>%filter(!Household_Income=="")
+#$0 - $24,999:low; $25,000 - $49,999: lwr_mid; $50,000 - $99,999: mid; $100,000 - $149,999: upr_mid; $150,000+: high
+data1$Household_Income[data1$Household_Income == '$0 - $24,999'] <- 'Low' 
+data1$Household_Income[data1$Household_Income == '$25,000 - $49,999'] <- 'Lwr_mid'
+data1$Household_Income[data1$Household_Income == '$50,000 - $99,999'] <- 'Mid'
+data1$Household_Income[data1$Household_Income == '$100,000 - $149,999'] <- 'Upr_mid'
+data1$Household_Income[data1$Household_Income == '$150,000+'] <- 'High'
+data1$Household_Income<-as.factor(data1$Household_Income)  
+data1 <- within(data1, Household_Income <- relevel(Household_Income, ref="Low"))
+
+data1<-data1%>%filter(!Education=="")%>%
+  mutate(Education = ifelse(Education=="Bachelor degree","UG",
+         ifelse(Education=="Graduate degree","Grad",
+         ifelse(Education=="High school degree","HS",
+         ifelse(Education=="Some college or Associate degree","Assoc","PriorHS")))))
+data1$Education<-as.factor(data1$Education)  
+data1 <- within(data1, Education <- relevel(Education, ref="PriorHS"))
+
+data1<-data1%>%filter(!Location=="")%>%
+    mutate(Region = ifelse(Location=="East North Central","NECtl",
+         ifelse(Location=="East South Central","SECtl",
+                ifelse(Location=="Middle Atlantic","MidAtl",
+                       ifelse(Location=="Mountain","Mtn",
+                              ifelse(Location=="New England","NEng", 
+                                    ifelse(Location=="Pacific","Pacific",
+                                           ifelse(Location=="South Atlantic","SAtl",
+                                                  ifelse(Location=="West North Central","NWCtl","SWCtl")))))))))%>%
+  dplyr::select(-c(Location))
+data1$Region<-as.factor(data1$Region)
+data1 <- within(data1, Region <- relevel(Region, ref="Pacific"))
+
+data1<-data1%>%filter(!China=="")%>%
+   filter(!China=="N/A")
+
+
+
+data1<-data1%>%filter(!Japan=="")%>%
+  filter(!Japan=="N/A")
+data1$Japan<-as.factor(data1$Japan)
+
+
+data1<-data1%>%filter(!US=="")%>%
+  filter(!US=="N/A")
+data1$US<-as.factor(data1$US)
+
+
+data1<-data1%>%filter(!Mexico=="")%>%
+  filter(!Mexico=="N/A")
+data1$Mexico<-as.factor(data1$Mexico)
+
+
+data1<-data1%>%filter(!Italy=="")%>%
+  filter(!Italy=="N/A")
+data1$Italy<-as.factor(data1$Italy)
+
+
+data1<-data1%>%dplyr::select(-(Thailand))
+
+data1$RespondentID<-as.numeric(data1$RespondentID)
+
+
+```
+
+```{r modeldata, warning=FALSE,echo=FALSE,message=FALSE}
+modeldata<-melt(data = data1, id.vars = c("RespondentID","Gender","Age","Household_Income","Education","Knowledge","Interest","Region"), measure.vars = c("Italy", "Japan","Mexico","US","China"))
+
+colnames(modeldata)<-c("RespondentID","Gender","Age","Household_Income","Education","Knowledge","Interest","Region","Cuisine","Rating5")
+
+modeldata <- within(modeldata, Cuisine <- relevel(Cuisine, ref="China"))
+
+
+modeldata$Rating5<-as.factor(modeldata$Rating5)
+
+```
+
+
+####Data Source
+
+The data was collected by The FiveThirtyEight International Food Association for Food World Cup in 2014. The orginal dataset$^{[2]}$ contained 1373 respondents polled by the Association through survey$^{[3]}$. The survey asked about respondents personal information and ratings on cuisines from 40 countries.
+
+####Data Cleaning
+Since some respondents were not able to rate some cuisines from some country due to unfamiliarity, these ratings were recorded as N/A. After data cleaning, the dataselt contained with 741 respondents with their personal information and ratings on 5 most common cuisines.
+
+Table 1 shows a sample of cleaned data.
+
+```{r sampledata, warning=FALSE,echo=FALSE,message=FALSE}
+
+kable(modeldata[1:6,],caption = "Table1: Cleaned Data Sample")%>%
+  kableExtra::kable_styling(full_width = TRUE)
+```
+
+####Variable
+
+The project dataset contained following variables:
+
+**RespondentID** - a unique ten digit ID for each respondent.
+
+**Gender** - a two-level categorical variable: Male, Female.
+
+**Age** - a four-level categorical variable: 18-29, 30-44, 45-59, >60.
+
+**Household_Income** - a five-level categorical variable indicating the respondent's annual household income: low  (\$0 - \$24,999), lwr_mid (\$25,000 - \$49,999), mid ( \$50,000 - \$99,999), upr_mid (\$100,000 - \$149,999), high (\$150,000+).
+
+**Education** - a five-level categorical variable indicating the respondent's education level: PriorHS (less than high school degree), HS (high school degree), Assoc (some college or Associate degree), UG (bachelor degree), Grad (graduate degree).
+
+**Region** - a nine-level categorical variable indicating the respondent's location: NECtl (East North Central), SECtl (East South Central), NWCtl (Wast North Central), SWCtl (Wast South Central), MidAtl (Middle Atlantic), SAtl (South Atlantic), Mtn (Mountain), NEng (New England), Pacific.
+
+**Knowledge** - a four-level categorical variable indicating the answer to question _Generally speaking, how would you rate your level of knowledge of cuisines from different parts of the world?_ : Novice, Intermediate, Advanced, Expert.
+
+**Interest** - a four-level categorical variable indicating the answer to question _Generally speaking, how would you rate your level of interest of cuisines from different parts of the world?_ : None, Little, Some, Lots.
+
+**Cuisine** - a five-level categorical variable indicating the type of cuisine the respondent rated on: China, Italy, Japan, Mexico, US.
+
+**Rating5** - a five-level categorical variable indicating 1-5 scale rating each country's cuisine: 5 (I love this country's traditional cuisine. I think it's one of the best in the world.), 4 (I like this country's traditional cuisine. I think it's considerably above average.), 3 (I'm OK with this county's traditional cuisine. I think it's about average.), 2 (I dislike this country's traditional cuisine. I think it's considerably below average.), 1 (I hate this country's traditional cuisine. I think it's one of the worst in the world.)$^{[4]}$. 
+
+
+
+
+###Model Used
+
+**Ordinal Mixed-Effect Logistic Regression Model**
+
+Two models were conducted during the analysis.  an ordinal logistic regression model and a ordinal mixed-effect logistic regression model using **Rating5** as predicted variable. 
+
+Becuase of the rating variability from each respondent and each type of cuisine, this report will focus on the two mixed-effect models. The regression models with no random effects was conducted to help find the best fitting variables with fixed effects$^{Appx.1}$.
+
+
+
+
+$$P(Y_i \leq j ) = logit^{-1}(\theta_j - \beta_{1k}\textrm{Interest}_{ik} - \beta_{2p}\textrm{Knowledge}_{ip} - u_1\textrm{RespondentID}_i - u_2\textrm{Cuisine}_i)$$
+
+$$i = 1,...,n\ $$
+
+$$\textrm{Threshold coefficients}\  \theta_j, \  j = 1,...,4\ $$
+
+$$\textrm{Interest coefficients}\  \beta_{1k}, \  k =  2, 3, 4\ $$
+
+$$\textrm{Knowledge coefficients}\  \beta_{2p}, \  p = 2, 3, 4\ $$
+
+$$\textrm{RespondentID random effect}\  u_1, \textrm{Cuisine random effect}\  u_2 $$
+
+
+
+
+
+
+##Result
+###Model Choice 
+
+```{r R5model, warning=FALSE,echo=FALSE,message=FALSE}
+
+lm1<-polr(Rating5 ~ Interest+Knowledge+Gender+Age+Household_Income+Education+Cuisine,data = modeldata) 
+
+Step_lm1 <- stepAIC(lm1, direction = "both", trace = FALSE)
+
+#exp(coef(Step_lm1))
+
+Step_lm1_CI <- confint(Step_lm1)
+
+Step_lm1_ORCI<-exp(cbind(OR = coef(Step_lm1), Step_lm1_CI))
+
+pred_1<-predict(Step_lm1,modeldata)
+tab1<-table(pred_1,modeldata$Rating5)
+
+cm1<-caret::confusionMatrix(tab1)
+```
+
+```{r R5Mmodel, warning=FALSE,echo=FALSE,message=FALSE}
+lm3<-ordinal::clmm(Rating5 ~ Interest + Knowledge  + Household_Income+(1|Cuisine)+(1|RespondentID),data = modeldata)
+
+lm33<-ordinal::clmm(Rating5 ~ Interest + Knowledge  + (1|Cuisine)+(1|RespondentID),data = modeldata)
+
+```
+
+Because both RespondentID and Cuisine are likely to have random effects, function **clmm** from package **ordinal** $^{[5]}$ was chosen to fit the model. This function fits cumulative link mixed models with one or more random effects via Laplace appriximation or quadrature mothods. Our model used Laplace approximation.
+
+The stepAIC function$^{[6]}$ helped to find the ordinal logistic regression model with the best fiiting fixed effect$^{Appx.2}$. The fixed effect predictors are Interest, Knowledge and Household_Income.
+
+After fitting the first model by using  Interest, Knowledge and Household_Income as fixed effect predictors and RespondentID and Cuisine as random effects, we did find random effects from RespondentID as well as Cuisine as presumed. 
+
+```{r lm3,warning=FALSE,echo=FALSE,message=FALSE}
+summary(lm3)
+```
+
+The random effect of RespondentID has a standard deviation 0.91 and the random effect of Cuisine has a standard deviation 0.66. The effects are not huge, but can not be neglected. From the model summary we could also see that Interest and Knowledge are statistically significant influential in a 95% confidence level while Household_Income terms appeared to be not.
+
+
+Therefore, another model was fitted without Household_Income as a predictor. The result is shown below.
+```{r lm33,warning=FALSE,echo=FALSE,message=FALSE}
+summary(lm33)
+```
+
+Likelihood ratio test was conducted to compare these two models.
+
+```{r anova,warning=FALSE,echo=FALSE,message=FALSE}
+anova(lm33,lm3)
+```
+
+From the Likelihood ratio test, we found that the LR statistics was 10.206 with a P-value at 0.038, which is statistially significant in a 0.05 $\alpha$ level. However, The first model is only better than the second in a difference of 2.2 AIC value, and the first model has 4 degrees of freedom higher than the second. 
+
+Therefore, the second model with Interest and Knowldge as fixed effects predictors and RespondentID and Cuisine as random effects, is considered as a better model.
+
+###Model Interpretation
+
+
+$$P(Rating5_i \leq 1 ) = logit^{-1}(-4.62 - 0.28*\textrm{Interest Little}- 1*\textrm{Interest Lots} - 0.71*\textrm{Interest Some} - 0.43*\textrm{Knowledge Advanced}- \\0.6*\textrm{Knowledge Expert} -0.16*\textrm{Knowledge Intermediate} - u_1\textrm{RespondentID}_i - \\(-0.58)*\textrm{Cuisine China} - 1.12*\textrm{Cuisine Italy} - (-0.64)*\textrm{Cuisine Japan} - 0.11*\textrm{Cuisine Mexico} - (-0.09)*\textrm{Cuisine US})$$
+
+$$P(Rating5_i \leq 2 ) = logit^{-1}(-2.56 - 0.28*\textrm{Interest Little}- 1*\textrm{Interest Lots} - 0.71*\textrm{Interest Some} - 0.43*\textrm{Knowledge Advanced}- \\0.6*\textrm{Knowledge Expert} -0.16*\textrm{Knowledge Intermediate} - u_1\textrm{RespondentID}_i - \\(-0.58)*\textrm{Cuisine China} - 1.12*\textrm{Cuisine Italy} - (-0.64)*\textrm{Cuisine Japan} - 0.11*\textrm{Cuisine Mexico} - (-0.09)*\textrm{Cuisine US})$$
+$$P(Rating5_i \leq 3 ) = logit^{-1}(-0.3 - 0.28*\textrm{Interest Little}- 1*\textrm{Interest Lots} - 0.71*\textrm{Interest Some} - 0.43*\textrm{Knowledge Advanced}- \\0.6*\textrm{Knowledge Expert} -0.16*\textrm{Knowledge Intermediate} - u_1\textrm{RespondentID}_i - \\(-0.58)*\textrm{Cuisine China} - 1.12*\textrm{Cuisine Italy} - (-0.64)*\textrm{Cuisine Japan} - 0.11*\textrm{Cuisine Mexico} - (-0.09)*\textrm{Cuisine US})$$
+
+$$P(Rating5_i \leq 4 ) = logit^{-1}(1.85 - 0.28*\textrm{Interest Little}- 1*\textrm{Interest Lots} - 0.71*\textrm{Interest Some} - 0.43*\textrm{Knowledge Advanced}- \\0.6*\textrm{Knowledge Expert} -0.16*\textrm{Knowledge Intermediate} - u_1\textrm{RespondentID}_i - \\(-0.58)*\textrm{Cuisine China} - 1.12*\textrm{Cuisine Italy} - (-0.64)*\textrm{Cuisine Japan} - 0.11*\textrm{Cuisine Mexico} - (-0.09)*\textrm{Cuisine US})$$
+
+
+
+**Interest**
+
+The coefficients for Interest are positive, and in an increaseing order, indicating that higher interests in cuisines in other country increases the rating on global cuisine, i.e., rating in higher categories is more likely.
+The odds ratio of the event $Y ??? j$ is exp($\beta_{interest}$), thus,
+
+the odds ratio of rating cuisine in category j or above with little interest in cuisine relative to none interest is $e^{0.28} = 1.32$;
+
+the odds ratio of rating cuisine in category j or above with some interest in cuisine relative to none interest is $e^{0.72} = 2.03$
+
+the odds ratio of rating cuisine in category j or above with lots interest in cuisine relative to none interest is $e^{1} = 2.72$
+
+From the 95% confidence interval of Interest coefficient below, we could see that InterestLittle is not statistially significant influential, InterestSome and InterestLots are both statistially significant influential to ratings.
+
+```{r Interest_Coefficient, warning=FALSE,echo=FALSE,message=FALSE,fig.height=5,fig.width=18}
+e<-c(0.2836,0.7108,1.0005)
+e<-as.data.frame(e)
+row.names(e)<-c("InterestLittle","InterestSome","InterestLots")
+se<-c(0.3009,0.2711,0.2865)
+se<-as.data.frame(se)
+row.names(se)<-c("InterestLittle","InterestSome","InterestLots")
+ci1 <- e$e + qnorm(0.975) * se$se %o% c(-1, 1)
+ord.re1 <- order(e$e)
+ord.ree1<-c("InterestLittle","InterestSome","InterestLots")
+ci1 <- ci1[order(e$e),]
+plot(1:3, e$e[ord.re1], axes=FALSE, ylim=range(ci1),
+      xlab="Figure1: 95% Confidence Interval of Interest Coefficient ", ylab="Interest Coefficient");axis(1, at=1:3, labels = ord.ree1);axis(2);for(i in 1:3) segments(i, ci1[i,1], i, ci1[i, 2]);abline(h = 0, lty=2)
+```
+
+**Knowledge**
+
+The coefficients for knowledge are positive, and in an increaseing order, indicating that higher knowledge in cuisines in other country increases the rating on global cuisine, i.e., rating in higher categories is more likely.
+The odds ratio of the event $Y ??? j$ is exp($\beta_{knowledge}$), thus,
+
+the odds ratio of rating cuisine in category j or above with Intermediate knowledge in cuisine relative to novice knowledge is $e^{0.16} = 1.17$;
+
+the odds ratio of rating cuisine in category j or above with advanced knowledge in cuisine relative to novice knowledge is $e^{0.43} = 1.54$
+
+the odds ratio of rating cuisine in category j or above with expect knowledge in cuisine relative to novice knowledge is $e^{0.6} = 1.82$
+
+From the 95% confidence interval of Knowledge coefficient below, we could see that KnowledgeAdvanced is not statistially significant influential, KnowledgeIntermediate and KnowledgeExpert are both statistially significant influential to ratings.
+
+```{r Knowledge_Coefficient, warning=FALSE,echo=FALSE,message=FALSE,fig.height=5,fig.width=18}
+e2<-c(0.1643,0.4261,0.5987)
+e2<-as.data.frame(e2)
+row.names(e2)<-c("KnowledgeIntermediate","KnowledgeAdvanced","KnowledgeExpert")
+se2<-c(0.1162,0.1619,0.3536)
+se2<-as.data.frame(se2)
+row.names(se2)<-c("KnowledgeIntermediate","KnowledgeAdvanced","KnowledgeExpert")
+ci2 <- e2$e2 + qnorm(0.975) * se2$se2 %o% c(-1, 1)
+ord.re2 <- order(e2$e2)
+ord.ree2<-c("KnowledgeIntermediate","KnowledgeAdvanced","KnowledgeExpert")
+ci2 <- ci2[order(e2$e2),]
+plot(1:3, e2$e2[ord.re2], axes=FALSE, ylim=range(ci2),
+      xlab="Figure2: 95% Confidence Interval of Knowledge Coefficient ", ylab="Knowledge Coefficient");axis(1, at=1:3, labels = ord.ree2);axis(2);for(i in 1:3) segments(i, ci2[i,1], i, ci2[i, 2]);abline(h = 0, lty=2)
+
+```
+
+**Cuisine**
+
+The following effect of cuisine plot shows the effect of cuisine have on rating at 95% condifence level.
+
+From the plot, we could see that Japanese and Chinese cuisine have a negative effect on rating, while Italian cuisine has a positive impact. The effect of US and Mexico cuisine cross zero, therefore, in this case, these two cuisines are not considered as statistically influential to rating.
+
+```{r Cuisine_Intercept, warning=FALSE,echo=FALSE,message=FALSE,fig.height=5,fig.width=18}
+reflm33<-as.data.frame(ranef.clmm(lm33)[2])
+cdvlm33<-as.data.frame(condVar(lm33)[2])
+ci <- reflm33$X.Intercept. + qnorm(0.975) * sqrt(cdvlm33$X.Intercept.) %o% c(-1, 1)
+ord.re <- order(reflm33$X.Intercept.)
+ord.ree<-c("Japan","China","US","Mexico","Italy")
+ci <- ci[order(reflm33$X.Intercept.),]
+plot(1:5, reflm33$X.Intercept.[ord.re], axes=FALSE, ylim=range(ci),
+      xlab="Figure3: 95% Confidence Interval of Cuisine Effect ", ylab="Cuisine effect");axis(1, at=1:5, labels = ord.ree);axis(2);for(i in 1:5) segments(i, ci[i,1], i, ci[i, 2]);abline(h = 0, lty=2)
+```
+
+**RespondentID**
+
+Take RespondentID 3308895255 as an example.
+
+Table 2 shows the information of RespondentID 3308895255
+```{r ex1, warning=FALSE,echo=FALSE,message=FALSE}
+example1<-modeldata%>%filter(RespondentID==3308895255)
+kable(example1,caption = "Table2: RespondentID 3308895255") %>%
+  kableExtra::kable_styling(full_width = T)
+```
+
+
+The rating probability table for RespondentID 3308895255 is shown in Table 3.
+```{r ex11, warning=FALSE,echo=FALSE,message=FALSE}
+
+CNfive<-1-invlogit(1.85 - 0.28*0- 1*0 - 0.71*1 - 0.43*0- 0.6*0 -0.16*1- 0.5 - (-0.58)*1 - 1.12*0 - (-0.64)*0 - 0.11*0 - (-0.09)*0)
+CNfour = 1-invlogit(-0.3 - 0.28*0- 1*0 - 0.71*1 - 0.43*0- 0.6*0 -0.16*1- 0.5 - (-0.58)*1 - 1.12*0 - (-0.64)*0 - 0.11*0 - (-0.09)*0) - CNfive
+CNthree<-1-invlogit(-2.56 - 0.28*0- 1*0 - 0.71*1 - 0.43*0- 0.6*0 -0.16*1- 0.5 - (-0.58)*1 - 1.12*0 - (-0.64)*0 - 0.11*0 - (-0.09)*0) -CNfour-CNfive
+CNtwo<-1-invlogit(-4.62 - 0.28*0- 1*0 - 0.71*1 - 0.43*0- 0.6*0 -0.16*1- 0.5 - (-0.58)*1 - 1.12*0 - (-0.64)*0 - 0.11*0 - (-0.09)*0)-CNthree-CNfour-CNfive
+CNone<-invlogit(-4.62 - 0.28*0- 1*0 - 0.71*1 - 0.43*0- 0.6*0 -0.16*1- 0.5 - (-0.58)*1 - 1.12*0 - (-0.64)*0 - 0.11*0 - (-0.09)*0)
+
+ITfive<-1-invlogit(1.85 - 0.28*0- 1*0 - 0.71*1 - 0.43*0- 0.6*0 -0.16*1- 0.5 - (-0.58)*0 - 1.12*1 - (-0.64)*0 - 0.11*0 - (-0.09)*0)
+ITfour = 1-invlogit(-0.3 - 0.28*0- 1*0 - 0.71*1 - 0.43*0- 0.6*0 -0.16*1- 0.5 - (-0.58)*0 - 1.12*1 - (-0.64)*0 - 0.11*0 - (-0.09)*0) - ITfive
+ITthree<-1-invlogit(-2.56 - 0.28*0- 1*0 - 0.71*1 - 0.43*0- 0.6*0 -0.16*1- 0.5 - (-0.58)*0 - 1.12*1 - (-0.64)*0 - 0.11*0 - (-0.09)*0) -ITfour-ITfive
+ITtwo<-1-invlogit(-4.62 - 0.28*0- 1*0 - 0.71*1 - 0.43*0- 0.6*0 -0.16*1- 0.5 - (-0.58)*0 - 1.12*1 - (-0.64)*0 - 0.11*0 - (-0.09)*0)-ITthree-ITfour-ITfive
+ITone<-invlogit(-4.62 - 0.28*0- 1*0 - 0.71*1 - 0.43*0- 0.6*0 -0.16*1- 0.5 - (-0.58)*0 - 1.12*1 - (-0.64)*0 - 0.11*0 - (-0.09)*0)
+
+JPfive<-1-invlogit(1.85 - 0.28*0- 1*0 - 0.71*1 - 0.43*0- 0.6*0 -0.16*1- 0.5 - (-0.58)*0 - 1.12*0 - (-0.64)*1 - 0.11*0 - (-0.09)*0)
+JPfour = 1-invlogit(-0.3 - 0.28*0- 1*0 - 0.71*1 - 0.43*0- 0.6*0 -0.16*1- 0.5 - (-0.58)*0 - 1.12*0 - (-0.64)*1 - 0.11*0 - (-0.09)*0) - JPfive
+JPthree<-1-invlogit(-2.56 - 0.28*0- 1*0 - 0.71*1 - 0.43*0- 0.6*0 -0.16*1- 0.5 - (-0.58)*0 - 1.12*0 - (-0.64)*1 - 0.11*0 - (-0.09)*0) -JPfour-JPfive
+JPtwo<-1-invlogit(-4.62 - 0.28*0- 1*0 - 0.71*1 - 0.43*0- 0.6*0 -0.16*1- 0.5 - (-0.58)*0 - 1.12*0 - (-0.64)*1 - 0.11*0 - (-0.09)*0)-JPthree-JPfour-JPfive
+JPone<-invlogit(-4.62 - 0.28*0- 1*0 - 0.71*1 - 0.43*0- 0.6*0 -0.16*1- 0.5 - (-0.58)*0 - 1.12*0 - (-0.64)*1 - 0.11*0 - (-0.09)*0)
+
+MEfive<-1-invlogit(1.85 - 0.28*0- 1*0 - 0.71*1 - 0.43*0- 0.6*0 -0.16*1- 0.5 - (-0.58)*0 - 1.12*0 - (-0.64)*0 - 0.11*1 - (-0.09)*0)
+MEfour = 1-invlogit(-0.3 - 0.28*0- 1*0 - 0.71*1 - 0.43*0- 0.6*0 -0.16*1- 0.5 - (-0.58)*0 - 1.12*0 - (-0.64)*0 - 0.11*1 - (-0.09)*0) - MEfive
+MEthree<-1-invlogit(-2.56 - 0.28*0- 1*0 - 0.71*1 - 0.43*0- 0.6*0 -0.16*1- 0.5 - (-0.58)*0 - 1.12*0 - (-0.64)*0 - 0.11*1 - (-0.09)*0) -MEfour-MEfive
+MEtwo<-1-invlogit(-4.62 - 0.28*0- 1*0 - 0.71*1 - 0.43*0- 0.6*0 -0.16*1- 0.5 - (-0.58)*0 - 1.12*0 - (-0.64)*0 - 0.11*1 - (-0.09)*0)-MEthree-MEfour-MEfive
+MEone<-invlogit(-4.62 - 0.28*0- 1*0 - 0.71*1 - 0.43*0- 0.6*0 -0.16*1- 0.5 - (-0.58)*0 - 1.12*0 - (-0.64)*0 - 0.11*1 - (-0.09)*0)
+
+USfive<-1-invlogit(1.85 - 0.28*0- 1*0 - 0.71*1 - 0.43*0- 0.6*0 -0.16*1- 0.5 - (-0.58)*0 - 1.12*0 - (-0.64)*0 - 0.11*0 - (-0.09)*1)
+USfour = 1-invlogit(-0.3 - 0.28*0- 1*0 - 0.71*1 - 0.43*0- 0.6*0 -0.16*1- 0.5 - (-0.58)*0 - 1.12*0 - (-0.64)*0 - 0.11*0 - (-0.09)*1) - USfive
+USthree<-1-invlogit(-2.56 - 0.28*0- 1*0 - 0.71*1 - 0.43*0- 0.6*0 -0.16*1- 0.5 - (-0.58)*0 - 1.12*0 - (-0.64)*0 - 0.11*0 - (-0.09)*1) -USfour-USfive
+UStwo<-1-invlogit(-4.62 - 0.28*0- 1*0 - 0.71*1 - 0.43*0- 0.6*0 -0.16*1- 0.5 - (-0.58)*0 - 1.12*0 - (-0.64)*0 - 0.11*0 - (-0.09)*1)-USthree-USfour-USfive
+USone<-invlogit(-4.62 - 0.28*0- 1*0 - 0.71*1 - 0.43*0- 0.6*0 -0.16*1- 0.5 - (-0.58)*0 - 1.12*0 - (-0.64)*0 - 0.11*0 - (-0.09)*1)
+
+RID1<-data.frame(Italy=c(ITone,ITtwo,ITthree,ITfour,ITfive),Mexico=c(MEone,MEtwo,MEthree,MEfour,MEfive),US=c(USone,UStwo,USthree,USfour,USfive),China = c(CNone,CNtwo,CNthree,CNfour,CNfive),Japan=c(JPone,JPtwo,JPthree,JPfour,JPfive))
+row.names(RID1)<-c("1","2","3","4","5")
+kable(RID1,digits = 2,caption = "Table3: Probability Table for RespondentID 3308895255") %>%
+  kableExtra::kable_styling(full_width = T)
+```
+
+
+Take RespondentID 3308845993 as another example.
+
+Table 4 shows the information of RespondentID 3308845993.
+```{r ex2, warning=FALSE,echo=FALSE,message=FALSE}
+example2<-modeldata%>%filter(RespondentID==3308845993)
+kable(example2,caption = "Table4: RespondentID 3308845993") %>%
+  kableExtra::kable_styling(full_width = T)
+```
+
+The rating probability table for RespondentID 3308845993 is shown in Table 5.
+```{r ex22, warning=FALSE,echo=FALSE,message=FALSE}
+
+CNfive<-1-invlogit(1.85 - 0.28*0- 1*1 - 0.71*0 - 0.43*1- 0.6*0 -0.16*0- 0.55 - (-0.58)*1 - 1.12*0 - (-0.64)*0 - 0.11*0 - (-0.09)*0)
+CNfour = 1-invlogit(-0.3 - 0.28*0- 1*1 - 0.71*0 - 0.43*1- 0.6*0 -0.16*0- 0.55 - (-0.58)*1 - 1.12*0 - (-0.64)*0 - 0.11*0 - (-0.09)*0) - CNfive
+CNthree<-1-invlogit(-2.56 - 0.28*0- 1*1 - 0.71*0 - 0.43*1- 0.6*0 -0.16*0- 0.55 - (-0.58)*1 - 1.12*0 - (-0.64)*0 - 0.11*0 - (-0.09)*0) -CNfour-CNfive
+CNtwo<-1-invlogit(-4.62 - 0.28*0- 1*1 - 0.71*0 - 0.43*1- 0.6*0 -0.16*0- 0.55 - (-0.58)*1 - 1.12*0 - (-0.64)*0 - 0.11*0 - (-0.09)*0)-CNthree-CNfour-CNfive
+CNone<-invlogit(-4.62 - 0.28*0- 1*1 - 0.71*0 - 0.43*1- 0.6*0 -0.16*0- 0.55 - (-0.58)*1 - 1.12*0 - (-0.64)*0 - 0.11*0 - (-0.09)*0)
+
+ITfive<-1-invlogit(1.85 - 0.28*0- 1*1 - 0.71*0 - 0.43*1- 0.6*0 -0.16*0- 0.55 - (-0.58)*0 - 1.12*1 - (-0.64)*0 - 0.11*0 - (-0.09)*0)
+ITfour = 1-invlogit(-0.3 - 0.28*0- 1*1 - 0.71*0 - 0.43*1- 0.6*0 -0.16*0- 0.55 - (-0.58)*0 - 1.12*1 - (-0.64)*0 - 0.11*0 - (-0.09)*0) - ITfive
+ITthree<-1-invlogit(-2.56 - 0.28*0- 1*1 - 0.71*0 - 0.43*1- 0.6*0 -0.16*0- 0.55 - (-0.58)*0 - 1.12*1 - (-0.64)*0 - 0.11*0 - (-0.09)*0) -ITfour-ITfive
+ITtwo<-1-invlogit(-4.62 - 0.28*0- 1*1 - 0.71*0 - 0.43*1- 0.6*0 -0.16*0- 0.55 - (-0.58)*0 - 1.12*1 - (-0.64)*0 - 0.11*0 - (-0.09)*0)-ITthree-ITfour-ITfive
+ITone<-invlogit(-4.62 - 0.28*0- 1*1 - 0.71*0 - 0.43*1- 0.6*0 -0.16*0- 0.55 - (-0.58)*0 - 1.12*1 - (-0.64)*0 - 0.11*0 - (-0.09)*0)
+
+JPfive<-1-invlogit(1.85 - 0.28*0- 1*1 - 0.71*0 - 0.43*1- 0.6*0 -0.16*0- 0.55 - (-0.58)*0 - 1.12*0 - (-0.64)*1 - 0.11*0 - (-0.09)*0)
+JPfour = 1-invlogit(-0.3 - 0.28*0- 1*1 - 0.71*0 - 0.43*1- 0.6*0 -0.16*0- 0.55 - (-0.58)*0 - 1.12*0 - (-0.64)*1 - 0.11*0 - (-0.09)*0) - JPfive
+JPthree<-1-invlogit(-2.56 - 0.28*0- 1*1 - 0.71*0 - 0.43*1- 0.6*0 -0.16*0- 0.55 - (-0.58)*0 - 1.12*0 - (-0.64)*1 - 0.11*0 - (-0.09)*0) -JPfour-JPfive
+JPtwo<-1-invlogit(-4.62 - 0.28*0- 1*1 - 0.71*0 - 0.43*1- 0.6*0 -0.16*0- 0.55 - (-0.58)*0 - 1.12*0 - (-0.64)*1 - 0.11*0 - (-0.09)*0)-JPthree-JPfour-JPfive
+JPone<-invlogit(-4.62 - 0.28*0- 1*1 - 0.71*0 - 0.43*1- 0.6*0 -0.16*0- 0.55 - (-0.58)*0 - 1.12*0 - (-0.64)*1 - 0.11*0 - (-0.09)*0)
+
+MEfive<-1-invlogit(1.85 - 0.28*0- 1*1 - 0.71*0 - 0.43*1- 0.6*0 -0.16*0- 0.55 - (-0.58)*0 - 1.12*0 - (-0.64)*0 - 0.11*1 - (-0.09)*0)
+MEfour = 1-invlogit(-0.3 - 0.28*0- 1*1 - 0.71*0 - 0.43*1- 0.6*0 -0.16*0- 0.55 - (-0.58)*0 - 1.12*0 - (-0.64)*0 - 0.11*1 - (-0.09)*0) - MEfive
+MEthree<-1-invlogit(-2.56 - 0.28*0- 1*1 - 0.71*0 - 0.43*1- 0.6*0 -0.16*0- 0.55 - (-0.58)*0 - 1.12*0 - (-0.64)*0 - 0.11*1 - (-0.09)*0) -MEfour-MEfive
+MEtwo<-1-invlogit(-4.62 - 0.28*0- 1*1 - 0.71*0 - 0.43*1- 0.6*0 -0.16*0- 0.55 - (-0.58)*0 - 1.12*0 - (-0.64)*0 - 0.11*1 - (-0.09)*0)-MEthree-MEfour-MEfive
+MEone<-invlogit(-4.62 - 0.28*0- 1*1 - 0.71*0 - 0.43*1- 0.6*0 -0.16*0- 0.55 - (-0.58)*0 - 1.12*0 - (-0.64)*0 - 0.11*1 - (-0.09)*0)
+
+USfive<-1-invlogit(1.85 - 0.28*0- 1*1 - 0.71*0 - 0.43*1- 0.6*0 -0.16*0- 0.55 - (-0.58)*0 - 1.12*0 - (-0.64)*0 - 0.11*0 - (-0.09)*1)
+USfour = 1-invlogit(-0.3 - 0.28*0- 1*1 - 0.71*0 - 0.43*1- 0.6*0 -0.16*0- 0.55 - (-0.58)*0 - 1.12*0 - (-0.64)*0 - 0.11*0 - (-0.09)*1) - USfive
+USthree<-1-invlogit(-2.56 - 0.28*0- 1*1 - 0.71*0 - 0.43*1- 0.6*0 -0.16*0- 0.55 - (-0.58)*0 - 1.12*0 - (-0.64)*0 - 0.11*0 - (-0.09)*1) -USfour-USfive
+UStwo<-1-invlogit(-4.62 - 0.28*0- 1*1 - 0.71*0 - 0.43*1- 0.6*0 -0.16*0- 0.55 - (-0.58)*0 - 1.12*0 - (-0.64)*0 - 0.11*0 - (-0.09)*1)-USthree-USfour-USfive
+USone<-invlogit(-4.62 - 0.28*0- 1*1 - 0.71*0 - 0.43*1- 0.6*0 -0.16*0- 0.55 - (-0.58)*0 - 1.12*0 - (-0.64)*0 - 0.11*0 - (-0.09)*1)
+
+RID2<-data.frame(Italy=c(ITone,ITtwo,ITthree,ITfour,ITfive),Mexico=c(MEone,MEtwo,MEthree,MEfour,MEfive),US=c(USone,UStwo,USthree,USfour,USfive),China = c(CNone,CNtwo,CNthree,CNfour,CNfive),Japan=c(JPone,JPtwo,JPthree,JPfour,JPfive))
+row.names(RID2)<-c("1","2","3","4","5")
+
+kable(RID2,digits = 2,caption = "Table5: Probability Table for RespondentID 3308845993")%>%
+  kableExtra::kable_styling(full_width = T)
+```
+
+###Model Checking
+
+From the model, the both coefficients for Knowledge and Interest are positive, and in an increaseing order, indicating that higher knowledge/interest in cuisines in other country increases the rating on global cuisine, i.e., rating in higher categories is more likely. 
+
+This result matches with explanatory data analysis in Knowledge and Interest for all for non-US cuisines. (Figure) This makes sense beucase higher interest or knowledge in cuisines from other country may lead to lower rating in US cuisine.
+
+
+```{r eda, warning=FALSE,echo=FALSE,message=FALSE}
+position1<-c("None","Little","Some","Lots")
+g1cn<-ggplot(data1, aes(fill=China, y=RespondentID, x=as.factor(Interest)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "China Cuisine", subtitle = "", y="",x="")+
+  scale_x_discrete(limits = position1)
+
+g1it<-ggplot(data1, aes(fill=Italy, y=RespondentID, x=as.factor(Interest)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "Italy Cuisine", subtitle = "", y="",x="")+
+  scale_x_discrete(limits = position1)
+
+g1me<-ggplot(data1, aes(fill=Mexico, y=RespondentID, x=as.factor(Interest)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "Mexico Cuisine", subtitle = "", y="",x="")+
+  scale_x_discrete(limits = position1)
+
+g1jp<-ggplot(data1, aes(fill=Japan, y=RespondentID, x=as.factor(Interest)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "Japan Cuisine", subtitle = "", y="",x="")+
+  scale_x_discrete(limits = position1)
+
+g1us<-ggplot(data1, aes(fill=US, y=RespondentID, x=as.factor(Interest)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "US Cuisine", subtitle = "", y="",x="")+
+  scale_x_discrete(limits = position1)
+
+
+
+position2<-c("Novice","Intermediate","Advanced","Expert")
+g2cn<-ggplot(data1, aes(fill=China, y=RespondentID, x=as.factor(Knowledge)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "China Cuisine", subtitle = "", y="",x="")+
+  scale_x_discrete(limits = position2)
+
+g2it<-ggplot(data1, aes(fill=Italy, y=RespondentID, x=as.factor(Knowledge)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "Italy Cuisine", subtitle = "", y="",x="")+
+  scale_x_discrete(limits = position2)
+
+g2me<-ggplot(data1, aes(fill=Mexico, y=RespondentID, x=as.factor(Knowledge)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "Mexico Cuisine", subtitle = "", y="",x="")+
+  scale_x_discrete(limits = position2)
+
+g2jp<-ggplot(data1, aes(fill=Japan, y=RespondentID, x=as.factor(Knowledge)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "Japan Cuisine", subtitle = "", y="",x="")+
+  scale_x_discrete(limits = position2)
+
+g2us<-ggplot(data1, aes(fill=US, y=RespondentID, x=as.factor(Knowledge)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="position2"))+
+  theme(text=element_text(size=14))+labs(title = "US Cuisine", subtitle = "", y="",x="")+
+  scale_x_discrete(limits = position2)
+
+```
+
+```{r EDAPlot1, warning=FALSE,echo=FALSE,message=FALSE,fig.height=10,fig.width=18}
+grid.arrange(g1it,g1me,g1us,g1cn,g1jp, nrow=2,left=textGrob("Percentage",rot=90, gp=gpar(fontsize=18)),bottom=textGrob("", gp=gpar(fontsize=18,font=24)),top=textGrob("Figure 4: Rating on Cuisine by Interest", gp=gpar(fontsize=28,font=11)))
+```
+
+
+
+```{r EDAPlot2, warning=FALSE,echo=FALSE,message=FALSE,fig.height=10,fig.width=18}
+grid.arrange(g2it,g2me,g2us,g2cn,g2jp, nrow=2,left=textGrob("Percentage",rot=90, gp=gpar(fontsize=18)),bottom=textGrob("", rot=45,gp=gpar(fontsize=18,font=24)),top=textGrob("Figure 5: Rating on Cuisine by Knowledge", gp=gpar(fontsize=28,font=11)))
+```
+
+The rating probability table for both example RespondentIDs mostly match with their original rating as well.
+
+According to the model, other variables are less influential than Knowledge and Interest. The EDAs on other variables show no obvious trend of increasing or decreasing rating$^{Appx.[3]}$. 
+
+The model also suggests that Italian cuisine tends to have a higher rating. The champion of Food World Cup held by The FiveThirtyEight International Food Association was actually Italy$^{[9]}$. From the Figure Ratings on Cuisines, we could also see that Italy has the most rating on 5, then Mexico and US. China and Japan have comparatively lower ratings. The random effect of Cuisine from model shows about the same trend.
+```{r EDAPlot3, warning=FALSE,echo=FALSE,message=FALSE,fig.height=3,fig.width=7}
+position3<-c("Italy","Mexico","US","China","Japan")
+ggplot(modeldata, aes(fill=Rating5, y=RespondentID, x=Cuisine))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "Figure 6: Ratings on Cuisines", subtitle = "", y="",x="")+
+  scale_x_discrete(limits = position3)
+```
+
+
+##Discussion
+###Implication
+
+The model result suggests that higher knowledge/interest in cuisines in other country increases the appraciation of global cuisines in general. Also, Italian cuisine appears to be the most favorite cuisine amoung all. 
+
+Business advices could be taken from these results. The best location to open an foreign restaurant might be an area  close to foreign language school, school with a lot of international students, or foreigner neighborhood, where the residents or visitors are more likely to have higher interest and knowledge in global cuisines. Among all kines of cuisine, Italian restaurant appears to be the one that is most likely to have high comments.
+
+###Limitation
+
+Because **ordinal::clmm** does not support **predict** function yet. It is not easy to compute the accuracy of prediction. Therefore, the analysis result may only be reliable to suggest a rough trend of ratings and the impact from knowledge and interest. Reference for specific prediction should be used with caution.
+
+###Futher Direction
+
+In the futher, the prediction check should be conducted to test the fitness. Transforming the data by grouping rating 4 - 5 as 1 and rating 1 - 3 as 0 , and to fit mixed-effect binomial logistic model could also be another choice. Function **glmmTMB::glmmTMB** could be used to fit mixed-effect binomial logistic model. $^{[7][8]}$ Exchanging 5-level rating with the ability to test for AUC could be taken into consideration.
+
+
+##Acknowledgement
+
+Many thanks to Professor Masanao Yajima for giving wonderful lectures in MA678 course, and in this project, giving extremely valuable suggestions for modeling.
+
+##Reference
+
+[1] "The FiveThirtyEight International Food Association???s 2014 World Cup". https://fivethirtyeight.com/features/the-fivethirtyeight-international-food-associations-2014-world-cup/
+
+[2]"food-world-cup-data.csv". Food-World-Cup Github Repository. https://github.com/fivethirtyeight/data/tree/master/food-world-cup
+
+[3] SurveyMonkey. 
+https://www.surveymonkey.com/mp/audience/?utm_expid=.GZaclx9SS_qo58EYRep7_A.0&utm_referrer=
+
+[4] "README" Food-World-Cup Github Repository. https://github.com/fivethirtyeight/data/blob/master/food-world-cup/README.md
+
+[5] "Package ordinal by Rune Haubo Bojesen Christensen". https://cran.r-project.org/web/packages/ordinal/ordinal.pdf
+
+[6] "stepAIC From MASS v7.3-51.1 by Brian Ripley". https://www.rdocumentation.org/packages/MASS/versions/7.3-51.1/topics/stepAIC
+
+[7] "Getting started with the glmmTMB package" https://cran.r-project.org/web/packages/glmmTMB/vignettes/glmmTMB.pdf
+
+[8] "Package glmmTMB by Mollie Brooks". https://cran.r-project.org/web/packages/glmmTMB/glmmTMB.pdf
+
+[9] The World Cup of Food. http://projects.aljazeera.com/2014/world-cup-food/#top
+
+
+
+##Appendix
+[1] Ordinal Logistic Regression model
+```{r appx1,warning=FALSE,echo=FALSE,message=FALSE}
+
+summary(lm1)
+```
+
+[2] Refined Ordinal Logistic Regression model after using MASS::StepAIC
+```{r appx2,warning=FALSE,echo=FALSE,message=FALSE}
+
+summary(Step_lm1)
+```
+
+[3] EDA on Other Variables
+```{r Appxeda, warning=FALSE,echo=FALSE,message=FALSE}
+position3<-c("NEng","MidAtl","SAtl","SECtl","SWCtl","NECtl","NWCtl","Mtn","Pacific")
+g3cn<-ggplot(data1, aes(fill=China, y=RespondentID, x=as.factor(Region)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "China Cuisine", subtitle = "", y="",x="")+
+  scale_x_discrete(limits = position3)
+
+g3it<-ggplot(data1, aes(fill=Italy, y=RespondentID, x=as.factor(Region)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "Italy Cuisine", subtitle = "", y="",x="")+
+  scale_x_discrete(limits = position3)
+
+g3me<-ggplot(data1, aes(fill=Mexico, y=RespondentID, x=as.factor(Region)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "Mexico Cuisine", subtitle = "", y="",x="")+
+  scale_x_discrete(limits = position3)
+
+g3jp<-ggplot(data1, aes(fill=Japan, y=RespondentID, x=as.factor(Region)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "Japan Cuisine", subtitle = "", y="",x="")+
+  scale_x_discrete(limits = position3)
+
+g3us<-ggplot(data1, aes(fill=US, y=RespondentID, x=as.factor(Region)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "US Cuisine", subtitle = "", y="",x="")+
+  scale_x_discrete(limits = position3)
+
+
+
+position4<-c("PriorHS","HS","Assoc","UG","Grad")
+g4cn<-ggplot(data1, aes(fill=China, y=RespondentID, x=as.factor(Education)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "China Cuisine", subtitle = "", y="",x="")+
+  scale_x_discrete(limits = position4)
+
+g4it<-ggplot(data1, aes(fill=Italy, y=RespondentID, x=as.factor(Education)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "Italy Cuisine", subtitle = "", y="",x="")+
+  scale_x_discrete(limits = position4)
+
+g4me<-ggplot(data1, aes(fill=Mexico, y=RespondentID, x=as.factor(Education)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "Mexico Cuisine", subtitle = "", y="",x="")+
+  scale_x_discrete(limits = position4)
+
+g4jp<-ggplot(data1, aes(fill=Japan, y=RespondentID, x=as.factor(Education)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "Japan Cuisine", subtitle = "", y="",x="")+
+  scale_x_discrete(limits = position4)
+
+g4us<-ggplot(data1, aes(fill=US, y=RespondentID, x=as.factor(Education)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="position2"))+
+  theme(text=element_text(size=14))+labs(title = "US Cuisine", subtitle = "", y="",x="")+
+  scale_x_discrete(limits = position4)
+
+
+
+
+g5cn<-ggplot(data1, aes(fill=China, y=RespondentID, x=as.factor(Gender)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "China Cuisine", subtitle = "", y="",x="")
+
+g5it<-ggplot(data1, aes(fill=Italy, y=RespondentID, x=as.factor(Gender)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "Italy Cuisine", subtitle = "", y="",x="")
+
+g5me<-ggplot(data1, aes(fill=Mexico, y=RespondentID, x=as.factor(Gender)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "Mexico Cuisine", subtitle = "", y="",x="")
+
+g5jp<-ggplot(data1, aes(fill=Japan, y=RespondentID, x=as.factor(Gender)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "Japan Cuisine", subtitle = "", y="",x="")
+
+g5us<-ggplot(data1, aes(fill=US, y=RespondentID, x=as.factor(Gender)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="position2"))+
+  theme(text=element_text(size=14))+labs(title = "US Cuisine", subtitle = "", y="",x="")
+
+
+g6cn<-ggplot(data1, aes(fill=China, y=RespondentID, x=as.factor(Age)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "China Cuisine", subtitle = "", y="",x="")
+
+g6it<-ggplot(data1, aes(fill=Italy, y=RespondentID, x=as.factor(Age)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "Italy Cuisine", subtitle = "", y="",x="")
+
+g6me<-ggplot(data1, aes(fill=Mexico, y=RespondentID, x=as.factor(Age)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "Mexico Cuisine", subtitle = "", y="",x="")
+
+g6jp<-ggplot(data1, aes(fill=Japan, y=RespondentID, x=as.factor(Age)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "Japan Cuisine", subtitle = "", y="",x="")
+
+g6us<-ggplot(data1, aes(fill=US, y=RespondentID, x=as.factor(Age)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="position2"))+
+  theme(text=element_text(size=14))+labs(title = "US Cuisine", subtitle = "", y="",x="")
+
+position7<-c("Low","Lwr_mid","Mid","Upr_mid","High")
+g7cn<-ggplot(data1, aes(fill=China, y=RespondentID, x=as.factor(Household_Income)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "China Cuisine", subtitle = "", y="",x="")+
+  scale_x_discrete(limits = position7)
+
+g7it<-ggplot(data1, aes(fill=Italy, y=RespondentID, x=as.factor(Household_Income)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "Italy Cuisine", subtitle = "", y="",x="")+
+  scale_x_discrete(limits = position7)
+
+g7me<-ggplot(data1, aes(fill=Mexico, y=RespondentID, x=as.factor(Household_Income)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "Mexico Cuisine", subtitle = "", y="",x="")+
+  scale_x_discrete(limits = position7)
+
+g7jp<-ggplot(data1, aes(fill=Japan, y=RespondentID, x=as.factor(Household_Income)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="Rating5"))+
+  theme(text=element_text(size=14))+labs(title = "Japan Cuisine", subtitle = "", y="",x="")+
+  scale_x_discrete(limits = position7)
+
+g7us<-ggplot(data1, aes(fill=US, y=RespondentID, x=as.factor(Household_Income)))+geom_bar(stat="identity",position="fill")+
+  guides(fill=guide_legend(title="position2"))+
+  theme(text=element_text(size=14))+labs(title = "US Cuisine", subtitle = "", y="",x="")+
+  scale_x_discrete(limits = position7)
+```
+
+```{r EDAPlot4, warning=FALSE,echo=FALSE,message=FALSE,fig.height=10,fig.width=18}
+grid.arrange(g3it,g3me,g3us,g3cn,g3jp, nrow=2,left=textGrob("Percentage",rot=90, gp=gpar(fontsize=18)),bottom=textGrob("", gp=gpar(fontsize=18,font=24)),top=textGrob("Figure 7: Rating on Cuisine by Region", gp=gpar(fontsize=28,font=11)))
+```
+
+
+```{r EDAPlot5, warning=FALSE,echo=FALSE,message=FALSE,fig.height=10,fig.width=18}
+grid.arrange(g4it,g4me,g4us,g4cn,g4jp, nrow=2,left=textGrob("Percentage",rot=90, gp=gpar(fontsize=18)),bottom=textGrob("", rot=45,gp=gpar(fontsize=18,font=24)),top=textGrob("Figure 8: Rating on Cuisine by Education", gp=gpar(fontsize=28,font=11)))
+```
+
+```{r EDAPlot6, warning=FALSE,echo=FALSE,message=FALSE,fig.height=10,fig.width=18}
+grid.arrange(g5it,g5me,g5us,g5cn,g5jp, nrow=2,left=textGrob("Percentage",rot=90, gp=gpar(fontsize=18)),bottom=textGrob("", rot=45,gp=gpar(fontsize=18,font=24)),top=textGrob("Figure 9: Rating on Cuisine by Gender", gp=gpar(fontsize=28,font=11)))
+```
+
+```{r EDAPlot7, warning=FALSE,echo=FALSE,message=FALSE,fig.height=10,fig.width=18}
+grid.arrange(g6it,g6me,g6us,g6cn,g6jp, nrow=2,left=textGrob("Percentage",rot=90, gp=gpar(fontsize=18)),bottom=textGrob("", rot=45,gp=gpar(fontsize=18,font=24)),top=textGrob("Figure 10: Rating on Cuisine by Age", gp=gpar(fontsize=28,font=11)))
+```
+
+```{r EDAPlot8, warning=FALSE,echo=FALSE,message=FALSE,fig.height=10,fig.width=18}
+grid.arrange(g7it,g7me,g7us,g7cn,g7jp, nrow=2,left=textGrob("Percentage",rot=90, gp=gpar(fontsize=18)),bottom=textGrob("", rot=45,gp=gpar(fontsize=18,font=24)),top=textGrob("Figure 11: Rating on Cuisine by Household_Income", gp=gpar(fontsize=28,font=11)))
+```
+
